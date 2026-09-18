@@ -281,7 +281,7 @@ def compression_ratio(
 
 
 def has_repetition(text: str) -> bool:
-    return detect_repetition(text).has_repetition
+    return detect_repetition(text, stop_after_first_hit=True).has_repetition
 
 
 def compute_rollout_step(args, rollout_id):

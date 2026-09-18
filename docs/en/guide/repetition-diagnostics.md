@@ -23,6 +23,8 @@ Omit `--output` to write JSON to stdout. JSONL needs only Python's standard libr
 
 These parameters apply to the offline report. The training `repetition_frac` metric uses the default settings. The tool scans every window, uses a single window for short nonempty responses, and adds a final window when needed to cover the end. Compression ratio is the number of UTF-8 bytes divided by the size after zlib compression at level 9.
 
+The metric stops scanning a sample after its first hit; the offline report always scans every window to collect complete diagnostics. Both produce the same repetition decision with the default settings. Compared with the previous tail-only metric, repetition anywhere in a response can now count, including responses of 10,000 characters or fewer that previously always returned false. Do not directly compare `repetition_frac` across runs using the old and new detectors.
+
 ## Reading the Report
 
 | Field | Meaning |

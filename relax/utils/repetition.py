@@ -31,14 +31,18 @@ def detect_repetition(
     window_size: int = 10_000,
     stride: int = 5_000,
     threshold: float = 10.0,
+    stop_after_first_hit: bool = False,
 ) -> RepetitionResult:
-    """Scan all windows using the UTF-8 byte compression ratio (zlib level 9).
+    """Scan windows using the UTF-8 byte compression ratio (zlib level 9).
 
     Offsets index Python string characters (Unicode code points), not bytes or
     tokens. Hits are suspicious windows, not exact repetition boundaries. A
     ratio strictly greater than ``threshold`` is a hit. Short responses use one
     window; an unaligned final window ends at ``len(text)``. Empty input has no
     windows and a maximum ratio of zero.
+
+    With ``stop_after_first_hit=True``, return after the first hit. Result fields
+    then describe only the scanned windows; keep the default for full diagnostics.
     """
     if window_size <= 0 or not 0 < stride <= window_size:
         raise ValueError("window_size and stride must be positive; stride must not exceed window_size")
@@ -60,4 +64,6 @@ def detect_repetition(
         window_count += 1
         if ratio > threshold:
             hits.append(RepetitionWindow(start, end, ratio))
+            if stop_after_first_hit:
+                break
     return RepetitionResult(bool(hits), tuple(hits), max_ratio, window_count)
