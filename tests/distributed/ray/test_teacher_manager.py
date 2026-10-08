@@ -112,6 +112,21 @@ def test_teacher_manager_exposes_ray_actor_api(monkeypatch):
     assert hasattr(teacher_manager.TeacherManager, "options")
 
 
+def test_teacher_manager_starts_engines_with_teacher_profile(monkeypatch):
+    teacher_manager = _import_teacher_manager(monkeypatch)
+    manager_cls = teacher_manager.TeacherManager.__ray_metadata__.modified_class
+    manager = object.__new__(manager_cls)
+    manager._overrides = {"model_path": "/teacher"}
+    manager.gpus_per_replica = 2
+
+    assert manager._build_engine_ctor_kwargs(0) == {
+        "sglang_overrides": {"model_path": "/teacher"},
+        "num_gpus_per_engine": 2,
+        "register_sigterm_handler": False,
+        "profile": "teacher",
+    }
+
+
 def test_teacher_recovery_reuses_original_endpoint(monkeypatch):
     teacher_manager = _import_teacher_manager(monkeypatch)
     manager_cls = teacher_manager.TeacherManager.__ray_metadata__.modified_class
