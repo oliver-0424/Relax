@@ -159,6 +159,37 @@ def test_teacher_engine_asks_for_a_smaller_slice_on_rollout_bundles(monkeypatch)
     assert resources(shared_pg=False, bundle_offset=0) == {"num_cpus": 0.2, "num_gpus": 0.2}
 
 
+def test_teacher_manager_checks_a_shared_placement_group_before_start(monkeypatch):
+    teacher_manager = _import_teacher_manager(monkeypatch)
+    manager_cls = teacher_manager.TeacherManager.__ray_metadata__.modified_class
+    manager = object.__new__(manager_cls)
+    manager._shared_pg_tuple = ("pg", list(range(8)), list(range(8)))
+
+    manager._shared_pg = True
+    assert manager._physical_placement() == ("actor", manager._shared_pg_tuple)
+    # A dedicated replica's placement group does not exist yet; it is checked when it is created.
+    manager._shared_pg = False
+    assert manager._physical_placement() is None
+
+
+def test_dedicated_teacher_placement_group_is_checked_and_returned_when_unusable(monkeypatch):
+    teacher_manager = _import_teacher_manager(monkeypatch)
+    manager_cls = teacher_manager.TeacherManager.__ray_metadata__.modified_class
+    manager = object.__new__(manager_cls)
+    manager.args = SimpleNamespace()
+    manager._shared_pg = False
+    manager.gpus_per_replica = 2
+    removed = []
+    # A 2-GPU group that Ray packed onto GPU 3 and GPU 5.
+    monkeypatch.setattr(teacher_manager, "create_placement_group", lambda **kwargs: ("pg", [0, 1], [3, 5]))
+    monkeypatch.setattr(teacher_manager, "remove_placement_group", removed.append)
+
+    with pytest.raises(ValueError, match="teacher replica 0.*not contiguous"):
+        manager._resolve_placement(0)
+
+    assert removed == ["pg"]
+
+
 def test_teacher_recovery_reuses_original_endpoint(monkeypatch):
     teacher_manager = _import_teacher_manager(monkeypatch)
     manager_cls = teacher_manager.TeacherManager.__ray_metadata__.modified_class

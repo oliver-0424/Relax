@@ -2,6 +2,7 @@
 
 
 import ray
+from ray.util.placement_group import remove_placement_group
 
 from relax.backends.sglang.sglang_engine import SGLangEngine
 from relax.core.service import create_placement_group
@@ -10,6 +11,8 @@ from relax.distributed.ray.multi_engine_manager import (
     SNAPSHOT_CONCURRENCY_GROUPS,
     MultiEngineManager,
 )
+from relax.distributed.ray.placement_physical import validate_engine_bundles
+from relax.distributed.ray.placement_planner import ACTOR_POOL
 from relax.distributed.ray.rollout import _allocate_rollout_engine_addr_and_ports_normal
 from relax.distributed.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
 from relax.utils.env import Envs
@@ -139,12 +142,25 @@ class TeacherManager(MultiEngineManager):
             num_gpus=self.gpus_per_replica,
             node_group_affinity=getattr(self.args, "enable_affinity", True),
         )
+        try:
+            # PACK is best effort: on a busy cluster the group may straddle nodes or skip GPUs.
+            validate_engine_bundles(
+                pg_tuple, 0, self.gpus_per_replica, label=f"teacher replica {replica} (dedicated placement group)"
+            )
+        except Exception:
+            remove_placement_group(pg_tuple[0])
+            raise
         gpu_index = _resolve_teacher_gpu_index(
             replica=replica,
             gpus_per_replica=self.gpus_per_replica,
             shared_pg=False,
         )
         return pg_tuple, True, gpu_index
+
+    def _physical_placement(self):
+        # Shared: checked once against the actor placement group. A dedicated
+        # replica's group only exists once _resolve_placement creates it.
+        return (ACTOR_POOL, self._shared_pg_tuple) if self._shared_pg else None
 
     def _ray_resource_kwargs(self, rank: int) -> dict:
         # A deferred teacher may sit on rollout's own bundles. Like a GenRM that
