@@ -43,16 +43,16 @@ def _import_teacher_manager(monkeypatch):
     return importlib.import_module("relax.distributed.ray.teacher_manager")
 
 
-def test_teacher_gpu_index_uses_rollout_offset_for_shared_pg(monkeypatch):
+def test_teacher_gpu_index_starts_at_planned_bundle_offset_for_shared_pg(monkeypatch):
     teacher_manager = _import_teacher_manager(monkeypatch)
-    args = SimpleNamespace(rollout_num_gpus=4)
 
+    # The placement plan already accounts for the rollout region in front.
     assert (
         teacher_manager._resolve_teacher_gpu_index(
-            args=args,
             replica=0,
             gpus_per_replica=4,
             shared_pg=True,
+            bundle_offset=4,
         )
         == 4
     )
@@ -60,11 +60,9 @@ def test_teacher_gpu_index_uses_rollout_offset_for_shared_pg(monkeypatch):
 
 def test_teacher_gpu_index_starts_at_zero_for_dedicated_pg(monkeypatch):
     teacher_manager = _import_teacher_manager(monkeypatch)
-    args = SimpleNamespace(rollout_num_gpus=4)
 
     assert (
         teacher_manager._resolve_teacher_gpu_index(
-            args=args,
             replica=0,
             gpus_per_replica=4,
             shared_pg=False,
@@ -73,17 +71,15 @@ def test_teacher_gpu_index_starts_at_zero_for_dedicated_pg(monkeypatch):
     )
 
 
-def test_teacher_gpu_index_uses_teacher_relative_bundle_offset(monkeypatch):
+def test_teacher_gpu_index_adds_replica_stride_to_absolute_bundle_offset(monkeypatch):
     teacher_manager = _import_teacher_manager(monkeypatch)
-    args = SimpleNamespace(rollout_num_gpus=8)
 
     assert (
         teacher_manager._resolve_teacher_gpu_index(
-            args=args,
             replica=1,
             gpus_per_replica=2,
             shared_pg=True,
-            bundle_offset=4,
+            bundle_offset=12,
         )
         == 14
     )
