@@ -147,7 +147,14 @@ class TeacherManager(MultiEngineManager):
         return pg_tuple, True, gpu_index
 
     def _ray_resource_kwargs(self, rank: int) -> dict:
-        return {"num_cpus": 0.2, "num_gpus": 0.2}
+        # A deferred teacher may sit on rollout's own bundles. Like a GenRM that
+        # shares them, it then asks Ray for a smaller slice so the bundle still
+        # fits the training actor, the rollout engine and the teacher.
+        shares_rollout_bundles = self._shared_pg and self._bundle_offset < int(
+            getattr(self.args, "rollout_num_gpus", None) or 0
+        )
+        fraction = 0.1 if shares_rollout_bundles else 0.2
+        return {"num_cpus": fraction, "num_gpus": fraction}
 
     def _build_engine_env_vars(self) -> dict[str, str]:
         return _build_teacher_engine_env(self.args)

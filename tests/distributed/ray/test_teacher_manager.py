@@ -139,6 +139,26 @@ def test_teacher_manager_starts_engines_with_teacher_profile(monkeypatch):
     }
 
 
+def test_teacher_engine_asks_for_a_smaller_slice_on_rollout_bundles(monkeypatch):
+    """A deferred teacher on rollout's own bundles shares each of them with the
+    training actor and a rollout engine, like a GenRM that shares them."""
+    teacher_manager = _import_teacher_manager(monkeypatch)
+    manager_cls = teacher_manager.TeacherManager.__ray_metadata__.modified_class
+
+    def resources(*, shared_pg, bundle_offset):
+        manager = object.__new__(manager_cls)
+        manager.args = SimpleNamespace(rollout_num_gpus=8)
+        manager._shared_pg = shared_pg
+        manager._bundle_offset = bundle_offset
+        return manager._ray_resource_kwargs(0)
+
+    assert resources(shared_pg=True, bundle_offset=0) == {"num_cpus": 0.1, "num_gpus": 0.1}
+    assert resources(shared_pg=True, bundle_offset=4) == {"num_cpus": 0.1, "num_gpus": 0.1}
+    # After rollout's region, or on a placement group of its own: unchanged.
+    assert resources(shared_pg=True, bundle_offset=8) == {"num_cpus": 0.2, "num_gpus": 0.2}
+    assert resources(shared_pg=False, bundle_offset=0) == {"num_cpus": 0.2, "num_gpus": 0.2}
+
+
 def test_teacher_recovery_reuses_original_endpoint(monkeypatch):
     teacher_manager = _import_teacher_manager(monkeypatch)
     manager_cls = teacher_manager.TeacherManager.__ray_metadata__.modified_class
