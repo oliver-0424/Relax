@@ -461,6 +461,7 @@ class EngineGroup:
     skip_router_registration: bool = False  # Skip router registration until weight sync completes
     lifecycle_status: EngineGroupLifecycle = EngineGroupLifecycle.ACTIVE
     eviction_requested: bool = False
+    _engine_urls: dict[int, str | None] = dataclasses.field(default_factory=dict, init=False, repr=False)
 
     @property
     def nodes_per_engine(self):
@@ -598,6 +599,23 @@ class EngineGroup:
         pool.settle(resident)
         return [pool.state(head) for head in pool.head_slots()]
 
+    def _cache_engine_urls(self, slots: list[int] | None = None) -> None:
+        """Record actual head URLs once init completes, before publication.
+
+        Discovery then reads local metadata even while an engine is busy with a
+        memory switch. Recovery only refreshes rebuilt slots.
+        """
+        pool = self._engine_pool()
+        heads = [
+            slot
+            for slot in (pool.head_slots() if slots is None else slots)
+            if slot % self.nodes_per_engine == 0 and self.all_engines[slot] is not None
+        ]
+        if heads:
+            urls = ray.get([self.all_engines[slot].get_url.remote() for slot in heads], timeout=10)
+            self._engine_urls.update(zip(heads, urls, strict=True))
+            pool.mark_initialized(heads)
+
     def start_engines(self, port_cursors: dict[int, int] | None = None) -> tuple[list, dict[int, int]]:
         """Create Ray actors, allocate ports, and fire ``engine.init()``
         without waiting.
@@ -633,6 +651,8 @@ class EngineGroup:
 
         pool = self._engine_pool()
         new_engines = pool.create()
+        for slot, _ in new_engines:
+            self._engine_urls.pop(slot, None)
         # Outside the group an engine is known by its global rank.
         rollout_engines = [(self.rank_offset + slot, engine) for slot, engine in new_engines]
 
@@ -828,6 +848,7 @@ class RolloutServer:
         for g, dead_indices in zip(groups, dead_per_group, strict=True):
             if g.pg is None or (g.is_scaled_out and g.lifecycle_status is not EngineGroupLifecycle.ACTIVE):
                 continue
+            g._cache_engine_urls(dead_indices)
             logger.info(f"Recovered {g.num_new_engines} dead rollout engines (worker_type={g.worker_type})")
             assert g.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
             if g.args.offload_rollout and dead_indices:
@@ -2382,6 +2403,7 @@ class RolloutManager(ReloadableMixin):
             engine_group.skip_dcs_registration = False
 
         # Step 6: Add to server
+        await asyncio.to_thread(engine_group._cache_engine_urls)
         srv.engine_groups.append(engine_group)
         engine_group.num_new_engines = 0
 
@@ -3366,25 +3388,19 @@ class RolloutManager(ReloadableMixin):
                 if group.lifecycle_status in (EngineGroupLifecycle.REMOVING, EngineGroupLifecycle.REMOVED):
                     continue
                 heads = group.engines
-                live = [(i, engine) for i, engine in enumerate(heads) if engine is not None]
-                urls: dict[int, str] = {}
-                if live:
-                    try:
-                        fetched = ray.get([engine.get_url.remote() for _, engine in live], timeout=10)
-                        urls = {i: url for (i, _), url in zip(live, fetched, strict=True)}
-                    except Exception:
-                        logger.debug("Failed to fetch engine URLs for the inference snapshot")
                 states = group.lifecycle_states(resident_state)
                 for i, engine in enumerate(heads):
                     # The head slot's global rank is stable across scale-in of other groups.
-                    rank = group.rank_offset + i * group.nodes_per_engine
+                    slot = i * group.nodes_per_engine
+                    rank = group.rank_offset + slot
+                    url = group._engine_urls.get(slot) if engine is not None else None
                     state = states[i]
                     if engine is not None and group.lifecycle_status is EngineGroupLifecycle.DRAINING:
                         state = EngineState.DRAINING
                     if group.worker_type in ("prefill", "decode"):
-                        workers.append((f"{group.worker_type}-{rank}", urls.get(i), state))
+                        workers.append((f"{group.worker_type}-{rank}", url, state))
                     else:
-                        replicas.append((rank, urls.get(i), state))
+                        replicas.append((rank, url, state))
             models.append(build_model_snapshot(name, replicas, router_url=router_url, diagnostic_workers=workers))
 
         revision = getattr(self, "_topology_revision", None)
@@ -4786,6 +4802,9 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
                 timeout=getattr(args, "rollout_engine_init_timeout", 3600.0),
                 log_interval=60.0,
             )
+
+        for group in engine_groups:
+            group._cache_engine_urls()
 
         servers[model_cfg.name] = RolloutServer(
             engine_groups=engine_groups,
