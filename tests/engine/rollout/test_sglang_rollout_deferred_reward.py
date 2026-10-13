@@ -278,7 +278,13 @@ def generation(monkeypatch):
             setattr(args, name, value)
         return await sglang_rollout.generate_rollout_async(args, 0, data_source, None)
 
-    return SimpleNamespace(run=run, events=events, failure=failure, state=state)
+    yield SimpleNamespace(run=run, events=events, failure=failure, state=state)
+
+    # A step that raises never ends its "rollout" timer, and the timer is one
+    # per process: a dangling start would fail every rollout step run after it.
+    step_timer = sglang_rollout.Timer()
+    step_timer.start_time.pop("rollout", None)
+    step_timer.start_info.pop("rollout", None)
 
 
 async def test_sglang_rollout_publishes_before_abort_by_default(generation):
